@@ -18,3 +18,14 @@ DB_PATH = os.getenv("DB_PATH", "data/risk_monitor.db")
 WATCHLIST = ["SPYM", "RDDT", "GOOGL", "JPM"]
 
 BASE_CURRENCY = "USD"
+
+# Connectivity recovery variables
+CAP = 30
+GROWTH_FACTOR = 2
+BASE = 1
+WATCHDOG_TIMEOUT = 30
+PROBE_TIMEOUT = 5
+
+# Execution-window resync
+EXEC_WINDOW_MARGIN = int(os.getenv("EXEC_WINDOW_MARGIN", "60"))
+EXEC_REQUEST_TIMEOUT = float(os.getenv("EXEC_REQUEST_TIMEOUT", "10"))

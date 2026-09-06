@@ -1,12 +1,18 @@
+import asyncio
 import logging
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import redis
-from ib_async import IB, Trade
+from ib_async import IB, ExecutionFilter, Fill, Trade
 from ib_async.objects import UNSET_DOUBLE
 
-from config import BASE_CURRENCY, REDIS_URL
+from config import (
+    BASE_CURRENCY,
+    EXEC_REQUEST_TIMEOUT,
+    EXEC_WINDOW_MARGIN,
+    REDIS_URL,
+)
 
 from .models import Holding, OpenOrder, Snapshot
 
@@ -323,6 +329,79 @@ def read_ib_open_trades(ib: IB) -> dict[int, Trade]:
         open_trades[trade.order.permId] = trade
 
     return open_trades
+
+
+def window_start(last_sync: str | None) -> datetime | None:
+    """Pick the start of the execution window from the last sync stamp.
+    Args:
+        last_sync: The `state:last_sync` value from `snapshot()`, or None when
+            the key is absent.
+
+    Returns:
+        The start of the window, or None when there is no usable stamp. None
+        means no filter, which is the whole day.
+    """
+    if not last_sync:
+        log.warning(
+            "No state:last_sync. The execution window covers the whole trading day."
+        )
+        return None
+
+    try:
+        stamp = datetime.fromisoformat(last_sync)
+    except ValueError:
+        log.warning(
+            f"state:last_sync does not parse: {last_sync!r}. "
+            f"The execution window covers the whole trading day."
+        )
+        return None
+
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+
+    return stamp - timedelta(seconds=EXEC_WINDOW_MARGIN)
+
+
+async def read_ib_window_executions(ib: IB, since: datetime | None) -> dict[str, Fill]:
+    """Read the executions IB reported since `since`.
+    Args:
+        ib: A connected IB instance.
+        since: The start of the window, from `window_start`. None asks for the
+            whole day.
+
+    Returns:
+        A dict of execId to Fill, for every execution in the window.
+
+    Raises:
+        asyncio.TimeoutError: IB did not answer within EXEC_REQUEST_TIMEOUT.
+    """
+    exec_filter = ExecutionFilter()
+    if since is not None:
+        exec_filter.time = since.astimezone().strftime("%Y%m%d-%H:%M:%S")
+
+    log.info(
+        f"Reading executions since "
+        f"{exec_filter.time or 'the start of the trading day'} "
+        f"(Gateway local time)."
+    )
+
+    fills = await asyncio.wait_for(
+        ib.reqExecutionsAsync(exec_filter), EXEC_REQUEST_TIMEOUT
+    )
+
+    executions = {fill.execution.execId: fill for fill in fills}
+
+    if not executions:
+        log.info("The execution window is empty. IB reported nothing.")
+        return executions
+
+    earliest = min(fill.execution.time for fill in executions.values())
+    latest = max(fill.execution.time for fill in executions.values())
+    log.info(
+        f"Execution window holds {len(executions)} executions "
+        f"| earliest={earliest.isoformat()} latest={latest.isoformat()}"
+    )
+    return executions
 
 
 def resync_from_ib(ib: IB, client: redis.Redis) -> None:

@@ -68,6 +68,13 @@ def seed_from_ib(ib: IB) -> None:
     )
 
 
+def seed_trades_from_ib(ib: IB) -> None:
+    trades.clear()
+    for trade in ib.openTrades():
+        trades[trade.order.orderId] = trade
+    log.info(f"Seeded {len(trades)} trades from IB.")
+
+
 def validate_order_request(
     contract: Contract, action: str, qty: float, limit_price: float | None = None
 ) -> str:
