@@ -2,8 +2,10 @@ import asyncio
 import logging
 import math
 import random
+import time
 from typing import Awaitable, Callable
 
+import redis
 from ib_async import IB, Contract, Stock, Ticker
 
 from config import (
@@ -13,10 +15,14 @@ from config import (
     IB_CLIENT_ID,
     IB_HOST,
     IB_PORT,
+    PRICE_LOG_SECONDS,
+    PRICE_PUBLISH_SECONDS,
     PROBE_TIMEOUT,
     WATCHDOG_TIMEOUT,
     WATCHLIST,
 )
+
+from .state import write_price
 
 DATA_FARM_STATUS_CODES = {2104, 2106, 2107, 2158, 10167}
 CONNECTIVITY_CODES = {1100, 1101, 1102}
@@ -55,20 +61,84 @@ def on_disconnect() -> None:
 
 
 def on_pending(tickers: set[Ticker]) -> None:
-    """
-    Pending ticker event handler.
-    """
+    """Pending ticker event handler."""
     for ticker in tickers:
-        if (
-            math.isnan(ticker.last)
-            or math.isnan(ticker.close)
-            or ticker.last < 0
-            or ticker.close < 0
-        ):
-            continue
-        log.info(
-            f"{ticker.contract.symbol} - Last: {ticker.last}; Close: {ticker.close}; Time: {ticker.time}"
+        log.debug(
+            f"{ticker.contract.symbol} - Last: {ticker.last}; "
+            f"Close: {ticker.close}; Time: {ticker.time}"
         )
+
+
+def _usable(price: float) -> bool:
+    """A price is usable when it is a real, strictly positive number.
+
+    NaN is the value a Ticker field holds before its first tick, and it is
+    invisible to comparison: `nan > 0` is False, and so is `nan <= 0`. It has
+    to be tested for by name. Zero is rejected as well, because a notional of
+    zero passes every limit.
+    """
+    return price is not None and not math.isnan(price) and price > 0
+
+
+def pick_price(ticker: Ticker) -> tuple[float | None, str]:
+    """Choose the price to publish for one ticker.
+
+    `last` first, because it is the current trade. `close` second, because it
+    stays populated outside regular hours, which is exactly when `last` is
+    NaN.
+
+    Args:
+        ticker: One subscribed ticker.
+
+    Returns:
+        The price and the name of the field it came from, or `(None, "none")`
+        when neither field is usable.
+    """
+    if _usable(ticker.last):
+        return ticker.last, "last"
+    if _usable(ticker.close):
+        return ticker.close, "close"
+    return None, "none"
+
+
+async def publish_prices(ib: IB, client: redis.Redis) -> None:
+    """Write one price per subscribed symbol to Redis on a fixed interval.
+    Args:
+        ib: The connected IB instance holding the subscriptions.
+        client: The Redis client.
+    """
+    last_log = float("-inf")
+    while True:
+        await asyncio.sleep(PRICE_PUBLISH_SECONDS)
+
+        if not ib.isConnected():
+            log.debug("Price publish skipped. The connection is down.")
+            continue
+
+        written: list[str] = []
+        try:
+            for ticker in ib.tickers():
+                symbol = ticker.contract.symbol
+                price, source = pick_price(ticker)
+                if price is None:
+                    log.debug(
+                        f"{symbol} - no usable price. "
+                        f"Last: {ticker.last}; Close: {ticker.close}"
+                    )
+                    continue
+                write_price(client, symbol, price)
+                written.append(f"{symbol}={price:g}({source})")
+        except redis.RedisError as e:
+            log.error(f"Price publish failed. Redis is unreachable: {e!r}")
+            continue
+        except Exception:
+            log.exception("Price publish cycle failed. The task continues.")
+            continue
+
+        now = time.monotonic()
+        if written and now - last_log >= PRICE_LOG_SECONDS:
+            log.info(f"Prices published: {', '.join(sorted(written))}")
+            last_log = now
 
 
 def build_ib() -> IB:

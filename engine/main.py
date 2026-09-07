@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import suppress
 
 import redis
 from ib_async import IB
@@ -10,6 +11,7 @@ from .ib_client import (
     attach_reconnect_signal,
     connect,
     on_pending,
+    publish_prices,
     reconnect_loop,
     subscribe,
 )
@@ -78,6 +80,7 @@ async def main():
         reconnect_loop(ib, IB_CLIENT_ID, signal, recover)
     )
     ib.pendingTickersEvent += on_pending
+    price_task = asyncio.create_task(publish_prices(ib, redis_client))
 
     ib.orderStatusEvent += on_order_status
     ib.execDetailsEvent += on_exec_details
@@ -87,6 +90,9 @@ async def main():
     try:
         await reconnect_task
     finally:
+        price_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await price_task
         for ticker in ib.tickers():
             ib.cancelMktData(ticker.contract)
         ib.disconnect()

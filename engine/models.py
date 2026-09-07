@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ib_async import Position
 
@@ -117,3 +117,13 @@ class Snapshot:
     open_orders: dict[int, OpenOrder]
     cash: str | None
     last_sync: str | None
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """The outcome of one risk check."""
+
+    check: str
+    passed: bool
+    reason: str
+    values: dict[str, float | None] = field(default_factory=dict)
