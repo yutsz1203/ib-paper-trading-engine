@@ -9,6 +9,7 @@ from config import IB_SCRIPT_CLIENT_ID
 from engine.ib_client import build_contracts, connect, qualify_contracts
 from engine.logging_config import setup_logging
 from engine.orders import cancel_order, place_order
+from engine.risk import RiskRejected
 
 setup_logging()
 log = logging.getLogger(__name__)
@@ -99,7 +100,7 @@ async def main(args: argparse.Namespace) -> int:
                 trade = place_order(
                     ib, contract, args.action, args.qty, args.limit_price
                 )
-            except ValueError as e:
+            except (ValueError, RiskRejected) as e:
                 log.error(f"Order rejected: {e}")
                 return 1
 

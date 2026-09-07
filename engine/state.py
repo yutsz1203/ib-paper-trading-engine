@@ -11,6 +11,7 @@ from config import (
     BASE_CURRENCY,
     EXEC_REQUEST_TIMEOUT,
     EXEC_WINDOW_MARGIN,
+    PRICE_TTL_SECONDS,
     REDIS_URL,
 )
 
@@ -444,3 +445,7 @@ def resync_from_ib(ib: IB, client: redis.Redis) -> None:
         f"| open orders written={len(open_trades)} removed={len(stale_perm_ids)} "
         f"| cash={cash}"
     )
+
+
+def write_price(client: redis.Redis, symbol: str, price: float) -> None:
+    client.set(f"price:{symbol}", price, ex=PRICE_TTL_SECONDS)

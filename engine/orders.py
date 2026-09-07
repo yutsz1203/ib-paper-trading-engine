@@ -17,6 +17,7 @@ from ib_async import (
 from config import WATCHLIST
 
 from .models import Holding
+from .risk import risk_check
 from .state import (
     apply_commissions,
     read_ib_commissions,
@@ -159,6 +160,7 @@ def place_order(
     if limit_price is not None:
         limit_price = round(limit_price, 2)
     action = validate_order_request(contract, action, qty, limit_price)
+    risk_check(redis_client, contract, action, qty, limit_price)
     order_ref = f"prm-{uuid.uuid4().hex[:8]}"
     order = build_order(action, qty, limit_price, order_ref)
     order_type = order.orderType
