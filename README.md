@@ -78,3 +78,21 @@ uv run python -m engine.main
 |`uv run python -m scripts.submit_order UNH BUY 10 --timeout 60`|Waits 60 seconds for a terminal status.|
 
 ## Project Structure
+```
+ib-paper-trading-engine/
+├── config.py                 # Settings, global constants
+├── engine/
+│   ├── main.py               # Entry point; wires connection, handlers, recovery
+│   ├── ib_client.py          # IB connection, reconnect, watchdog, price feed
+│   ├── orders.py             # Order validation, submission, fill reconciliation
+│   ├── risk.py               # Pre-trade risk gates
+│   ├── state.py              # Redis reads and writes, resync from IB
+│   ├── reconcile.py          # Compares Redis against IB before a resync
+│   ├── models.py             # Dataclasses for positions, orders, verdicts, and more
+│   └── logging_config.py     # Logging setup
+├── scripts/
+│   └── submit_order.py       # CLI to submit and cancel orders
+├── tests/
+│   ├── test_risk.py          # Unit tests for the risk gates
+└── .env.example              # Template for the required environment variables
+```
