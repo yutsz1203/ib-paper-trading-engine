@@ -113,8 +113,8 @@ class OpenOrder:
 
 @dataclass(frozen=True)
 class Snapshot:
-    positions: dict[str, Holding]
-    open_orders: dict[int, OpenOrder]
+    positions: dict[str, Holding]  # keyed by symbol
+    open_orders: dict[int, OpenOrder]  # keyed by permId
     cash: str | None
     last_sync: str | None
 

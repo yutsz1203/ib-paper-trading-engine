@@ -8,7 +8,7 @@ from ib_async import Contract
 
 from config import NOTIONAL_LIMIT, POSITION_CAP
 
-from .models import OpenOrder, Snapshot, Verdict
+from .models import Snapshot, Verdict
 from .state import snapshot
 
 log = logging.getLogger(__name__)
@@ -93,20 +93,6 @@ def check_position_cap(
     return Verdict(check="position_cap", passed=passed, reason=reason, values=values)
 
 
-def _pending_value(order: OpenOrder, market_price: float) -> float:
-    """Value the unfilled part of one open order.
-    Args:
-        order: One open order on the symbol under test.
-        market_price: The resolved market price of the symbol.
-
-    Returns:
-        The unsigned value of the unfilled quantity.
-    """
-    if order.lmtPrice > 0:
-        return order.remaining * order.lmtPrice
-    return order.remaining * market_price
-
-
 def get_market_price(client: redis.Redis, contract: Contract) -> float | None:
     raw = client.get(f"price:{contract.symbol}")
     if raw is None:
@@ -129,7 +115,29 @@ def check_notional_limit(
     limit_price: float | None,
     snap: Snapshot,
 ) -> Verdict:
+    """Check the projected mark-to-market exposure in one symbol against
+    `NOTIONAL_LIMIT`.
 
+    Every share is valued at `market_price`, whether it is already held, is
+    sitting unfilled in an open order, or belongs to this order. Notional
+    exposure is what a position is worth, not what it cost to acquire, so the
+    provenance of a share must not change its value.
+
+    Args:
+        contract: The qualified contract of the order.
+        action: The normalized action, so `"BUY"` or `"SELL"`.
+        qty: The order quantity, positive.
+        market_price: The resolved market price of the symbol.
+        limit_price: The limit price of the order, or None for a market order.
+            Logged only.
+        snap: One read of the state, shared by every check.
+
+    Returns:
+        A Verdict. `values` holds the exposure arithmetic.
+
+    Raises:
+        ValueError: `action` is neither `"BUY"` nor `"SELL"`.
+    """
     if action not in _SIGN:
         raise ValueError(f"Action must be 'BUY' or 'SELL', got {action!r}.")
 
@@ -137,32 +145,38 @@ def check_notional_limit(
     sign = _SIGN[action]
 
     holding = snap.positions.get(symbol)
-    current = market_price * holding.qty if holding is not None else 0.0
+    current_qty = holding.qty if holding is not None else 0.0
 
-    pending = sign * sum(
-        _pending_value(order, market_price)
+    pending_qty = sign * sum(
+        order.remaining
         for order in snap.open_orders.values()
         if order.symbol == symbol and order.action == action
     )
 
-    order_price = limit_price if limit_price else market_price
-
-    projected = current + sign * qty * order_price + pending
+    projected_qty = current_qty + sign * qty + pending_qty
+    projected = projected_qty * market_price
     exposure = abs(projected)
     passed = exposure <= NOTIONAL_LIMIT
 
+    current_value = current_qty * market_price
+    order_value = sign * qty * market_price
+    pending_value = pending_qty * market_price
+
     values = {
-        "current_value": current,
-        "order_value": sign * qty * order_price,
-        "pending_same_direction": pending,
+        "current_value": current_value,
+        "order_value": order_value,
+        "pending_same_direction": pending_value,
         "projected_value": projected,
         "exposure": exposure,
         "cap": float(NOTIONAL_LIMIT),
+        "market_price": market_price,
+        "limit_price": limit_price,
     }
     reason = (
         f"{symbol} projected {projected:+.4f} "
-        f"(current {current:+.4f}, order {values["order_value"]:+.4f}, "
-        f"pending {pending:+.4f}), exposure {exposure:+.4f} vs cap {NOTIONAL_LIMIT}"
+        f"(current {current_value:+.4f}, order {order_value:+.4f}, "
+        f"pending {pending_value:+.4f}), marked at {market_price:.4f}, "
+        f"exposure {exposure:.4f} vs cap {NOTIONAL_LIMIT}"
     )
 
     if passed:
