@@ -1,5 +1,13 @@
 # IB Paper Trading Engine
-A Python trading engine for an Interactive Brokers paper account. It sends market orders and limit orders to IB Gateway, and it applies a position cap and a notional cap for each symbol first. Redis holds the live state. When the engine loses the connection, it reconnects by itself and corrects that state against the record of IB.
+An event-driven IBKR paper-trading engine: streams and logs delayed quotes for a configurable watchlist, submits and reconciles orders, keeps positions, open orders and prices live in Redis, and reconnects and resyncs from IB on its own. Every order passes a fail-closed pre-trade risk gate on position and notional exposure.
+
+## What it does
+- **Market data**: Streams and logs delayed quotes for a configurable watchlist.
+- **Orders**: Submits market and limit orders, and cancels an open order by id, from a CLI (`scripts/submit_order.py`).
+- **Pre-trade risk gate**: Position and notional exposure caps and limits.
+- **Real-time state in Redis**: Positions, open orders, account cash, last-sync timestamp and latest prices.
+- **Connectivity failure and recovery**: Reconnects by itself. The engine reads positions, open orders and executions from IB again. Then it repairs or deletes stale Redis keys. Subsribes to market data again.
+
 
 ## Prerequisites
 
